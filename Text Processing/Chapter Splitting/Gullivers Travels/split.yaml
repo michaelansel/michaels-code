@@ -1,0 +1,6 @@
+input:
+  filename: Gullivers Travels.txt
+  bookname: Gullivers Travels
+  chapter type: roman
+output:
+  name: Gullivers Travels
