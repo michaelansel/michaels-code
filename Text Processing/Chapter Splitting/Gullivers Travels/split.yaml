@@ -1,6 +1,5 @@
 input:
   filename: Gullivers Travels.txt
-  bookname: Gullivers Travels
-  chapter type: roman
+  split method: regex(chapter+roman+separator),notitle
 output:
-  name: Gullivers Travels
+  name: book name

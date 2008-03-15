@@ -1,7 +1,23 @@
 input:
-  filename: 
-  bookname: 
-  chapter type: 
+  filename: <input text file>
+            example: Lord of the Rings - Book 1.txt
+  split method: regex(<option>+<option>+<option>),<title mode>
+            example: regex(chapter+number+separator),oneline
+            example chapter: Chapter 1: An Unexpected Visitor
+            Possible regex options: chapter,roman,arabic,number,
+                                    separator,manual,titlecase
+            Possible title modes: notitle,oneline,twoline
+  split method: <filename containing list of chapters>
+  split method: <number of lines per chapter>
+            example: 600   causes a new chapter every 600 lines
 output:
-  name: 
-  name_code: 
+  name: <output filename>
+            example: LotR     yields   001 - LotR.txt
+            example: bookname yields   001 - Lord of the Rings - Book 1.txt
+            example: chaptertitle yields 001 - An Unexpected Visitor.txt
+  name: code(<expression to generate file name>)
+            example: code(chapter_title)   yields   001 - An Unexpected Visitor.txt
+
+            Note: for output names, the only user-modifiable part of the name
+                  is AFTER the '### - ' (the first part specifies the chapter number
+                  and keeps all your chapter files in order
