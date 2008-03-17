@@ -191,15 +191,24 @@ lines.size.times do
     next
   end
 
+  # Detect chapter boundary (unless using size limits)
   # Minimum chapter size (no minimum limit for header info)
   if $auto_split and not $size_limit and ( chapter_line_num > 5 or chapternum == 0 )
     # Chapter (Boundary) Detection
-    #new_chapter_title = do_chapter_detection(current,lines,chapter_type)
     new_chapter_title = detect_chapters(current,lines,:rules => rules,:title_mode => title_mode)
     boundary = !(new_chapter_title.nil?)
   end
 
-  if boundary or (not $size_limit.nil? and chapter_line_num >= $size_limit)
+  # Boundary if we are using size limits
+  if defined? $size_limit and chapter_line_num >= $size_limit
+    # We have to add the boundary line to the text array
+    # Otherwise it is treated like a chapter line and discarded
+    print "."
+    chapterlines[chapter_line_num] = current
+    boundary = true
+  end
+
+  if boundary
     boundary = false
 
     save_chapter(outputname,chapternum,chapter_title,chapterlines)
