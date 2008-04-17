@@ -2,6 +2,7 @@
 
 ### Regular Expressions
 $chapter = "C((hapter)|(HAPTER))[ ]"
+$part = "P((art)|(ART))[ ]"
 $roman = """
 M{0,4}              # thousands - 0 to 4 M's
 ((CM)|(CD)|(D?C{0,3}))    # hundreds - 900 (CM), 400 (CD), 0-300 (0 to 3 C's),
@@ -26,18 +27,40 @@ $titlecase = """
 ){1,10}    # < 10 words in title
 \\b$        # End with a word boundary (no punctuation)
 """
+$html = """                 #Matches only html tags with no text in between them
+(
+  (<[^>]*\/>)               #Self closing tags
+  |
+  (
+    <[^>]*>                 #Open tag
+    (
+      (<\/[^>]*>)           #Close tag with no text
+      |
+      (?=([^<]*<\/[^>]*>))  #Close tag somewhere else
+    )
+  )
+)*                          #Multiple tags
+"""
+#Yes: <a label="ch1"></a>    OR    <br/>
+#No: <a label="ch1" href="home">home</a>
+
+#Closing tag for stripping html
+$htmlopen = ""
+$htmlclose = ""
 
 
 
 ### Chapter title detection methods
 
 def detect_chapters(current,lines,options={})
+  return nil if current.size > 64 # Maximum line size
 #  if rules and title
 #  if !rulesnil and !titlenil
 #  if !(rulesnil or titlenil)
   unless options[:rules].nil? or options[:title_mode].nil?
     regex = /#{eval('a=$'+options[:rules].join('+$'))}/x
     return nil unless current.strip =~ regex
+    current = striphtml(current) if options[:rules].to_s.include? 'html'
     return send(options[:title_mode],current,lines,regex)
   end
   return check_list(current) unless $chapter_titles[0].nil? or current.nil?
@@ -102,6 +125,9 @@ def control! code
   end
 end
 
+def striphtml text
+  return text.strip.gsub(/<[^>]*>/,'').strip
+end
 
 
 
