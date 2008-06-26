@@ -68,7 +68,7 @@ class Note
     if @id == 0
       $db.execute("INSERT INTO Note (creation_date,title,summary) VALUES('#{@time}','#{e(@title)}','#{e(@summary)}');")
       @id = $db.get_first_value("SELECT ROWID FROM Note WHERE creation_date='#{@time}' AND title='#{e(@title)}' AND summary='#{e(@summary)}';")
-      $db.execute("INSERT INTO note_bodies (note_id,data) VALUES('#{@id}','#{@body}');")
+      $db.execute("INSERT INTO note_bodies (note_id,data) VALUES('#{@id}','#{e(@body)}');")
     else
       $db.execute("UPDATE Note SET creation_date='#{@time}',title='#{e(@title)}',summary='#{e(@summary)}' WHERE ROWID=#{@id};")
       $db.execute("UPDATE note_bodies SET data='#{e(@body)}' WHERE note_id=#{@id}")
@@ -283,8 +283,11 @@ puts '-'*30
 todo_txt = File.open($todopath+'.new','w+')
 
 a.flatten.compact.each do |cat|
-  puts finish["ToDo @"+cat.data]+"\n"
-  todo_txt.write(finish["ToDo @"+cat.data]+"\n")
+  data = finish["ToDo @"+cat.data]
+  unless data.nil?
+    puts data+"\n"
+    todo_txt.write(data+"\n")
+  end
 end
 todo_txt.flush
 todo_txt.close
@@ -301,8 +304,10 @@ def sync
 
   remote = IO.readlines($todopath+'.new')
 
+  merged = Merge3::three_way(common.join,local.join,remote.join)
+
   todo = File.open($todopath,'w+')
-  todo.write(Merge3::three_way(common.join,local.join,remote.join))
+  todo.write(merged)
   todo.flush
   todo.close
 
