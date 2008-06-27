@@ -6,6 +6,7 @@ require 'rubygems'
 require 'merge3'
 
 debug = false
+debug = true
 
 if File.exist? '/mnt/iphone/mount.sh'
   puts "iPhone FS not mounted!"
@@ -34,7 +35,7 @@ class Note
     @body=@title+"\n"+@summary
   end
 
-  def self.load(id)
+  def self.load(id,lazy=false)
     puts "Loading note..."
     result=$db.get_first_row("SELECT creation_date,title,summary FROM Note WHERE ROWID=#{id};")
     puts "done"
@@ -48,18 +49,25 @@ class Note
     note.title = result[1]
     puts "Loaded #{note.title}"
     note.summary = result[2]
-    note.rawbody=$db.get_first_value("SELECT data FROM note_bodies WHERE note_id=#{id};")
+    note.rawbody = nil
+    load_body unless lazy
     return note
+  end
+
+  def load_body
+    puts "Fetching Note body..."
+    @body=$db.get_first_value("SELECT data FROM note_bodies WHERE note_id=#{@id};")
+    @body="" if @body.nil?
   end
 
   def self.load_all
     result=$db.execute("SELECT ROWID FROM Note;")
-    return result.flatten.collect { |id| self.load(id) }
+    return result.flatten.collect { |id| self.load(id,true) }
   end
 
   def self.load_title(title="")
     result=$db.execute("SELECT ROWID FROM Note WHERE title GLOB '#{title}';")
-    return result.flatten.collect { |id| self.load(id) }
+    return result.flatten.collect { |id| self.load(id,true) }
   end
 
   def save
@@ -85,7 +93,7 @@ class Note
   end
 
   def body
-    @body.gsub(/^[^<]*<div><br class="webkit-block-placeholder"><\/div>/,'').gsub(/(<[\/]?div>)+/,"\n").gsub(/&lt;/,'<').gsub(/&gt;/,'>').gsub(/&amp;/,'&').gsub(/\\\\/,'\\').gsub(/''/,"'").gsub(/ /,' ').gsub(/<br[^>]*>/,"")
+    rawbody.gsub(/^[^<]*<div><br class="webkit-block-placeholder"><\/div>/,'').gsub(/(<[\/]?div>)+/,"\n").gsub(/&lt;/,'<').gsub(/&gt;/,'>').gsub(/&amp;/,'&').gsub(/\\\\/,'\\').gsub(/''/,"'").gsub(/ /,' ').gsub(/<br[^>]*>/,"")
   end
 
   def body=(text)
@@ -111,6 +119,7 @@ class Note
   end
 
   def rawbody
+    load_body if @body.nil?
     @body
   end
 
@@ -232,67 +241,84 @@ end
 #puts note.body
 #note.save
 
-def push
-system 'cp '+$todopath+' '+$todopath+'.bak'
-system 'cp '+$todopath+' '+$todopath+'.latest'
-b=ToDoItem.load_vo($todopath)
-a=b.children
-#puts a.to_s
-#puts a.inspect
-puts '-'*50
-start = {}
-a.compact.delete_if{|x|x.status!=:category}.each do |category|
-  note = Note.load_title("ToDo @#{category.data}")[0]
-  note = Note.new("ToDo @#{category.data}",ToDoItem::VIM_OUTLINE[:category]+category.data) if note.nil?
-  #start[note.title] = category.to_s
-  note.body = category.to_s
-  puts note.rawbody
+def push(force=false)
   puts '-'*50
-  note.save
+  system 'cp "'+$todopath+'" "'+$todopath+'.bak"'
+  system 'cp "'+$todopath+'" "'+$todopath+'.latest"'
+  latest_times = File.open($todopath+'.latest-times','w+')
+
+  # Write each ToDoItem to an iPhone Note
+  ToDoItem.load_vo($todopath).children.compact.delete_if{|x|x.status!=:category}.each do |category|
+    note = Note.load_title("ToDo @#{category.data}")[0]
+    note = Note.new("ToDo @#{category.data}",ToDoItem::VIM_OUTLINE[:category]+category.data) if note.nil?
+    if force || note.body.chomp.strip != category.to_s.chomp.strip
+      puts "Old body"
+      puts '-'*20
+      puts note.body.chomp.strip
+      puts '-'*20
+      puts "New body"
+      puts '-'*20
+      note.body = category.to_s
+      puts category.to_s.chomp.strip
+      puts '-'*20
+      puts note.rawbody
+      puts '-'*50
+      note.save
+      latest_times.write(note.title+" :: "+note.time.to_s+"\n")
+    else
+      puts "Note body unchanged. Forget writing that again!"
+      latest_times.write(note.title+" :: "+note.time.to_s+"\n")
+    end
+  end
+  latest_times.flush
+  latest_times.close
 end
 
-end
-
-#puts b.to_vo
-#puts '-'*30
 
 
 def pull
+  finish = {}
+  latest_times = {}
 
-b=ToDoItem.load_vo($todopath)
-a=b.children
-finish = {}
+  # Read last updated times
+  IO.readlines($todopath+'.latest-times').each{|x| a=x.split(" :: ");latest_times[a[0].chomp.strip]=a[1].chomp.strip}
+  puts latest_times.inspect
 
-Note.load_title("ToDo @*").each do |note|
-  puts '-'*20
-  puts note.to_s.chomp
-  puts '-'*10
-  puts note.rawbody
-  puts '-'*10
-  #puts note.body
-  #puts
-  finish[note.title] = note.body
-end
-
-#puts '-'*30
-
-#puts "@priority"
-#puts Note.load_title("ToDo @priority")[0].body
-
-puts '-'*30
-todo_txt = File.open($todopath+'.new','w+')
-
-a.flatten.compact.each do |cat|
-  data = finish["ToDo @"+cat.data]
-  unless data.nil?
-    puts data+"\n"
-    todo_txt.write(data+"\n")
+  # Load Notes
+  Note.load_title("ToDo @*").each do |note|
+    puts '-'*20
+    puts note.to_s.chomp
+    puts '-'*10
+    unless note.time == latest_times[note.title]
+      puts note.rawbody
+      puts '-'*10
+      finish[note.title] = note.body
+    else
+      finish[note.title] = nil
+    end
   end
-end
-todo_txt.flush
-todo_txt.close
 
-puts '-'*30
+  puts '-'*30
+  todo_txt = File.open($todopath+'.new','w+')
+
+  # Write notes locally in existing order
+  ToDoItem.load_vo($todopath).children.flatten.compact.each do |cat|
+    data = finish["ToDo @"+cat.data]
+    puts '-'*20
+    if data.nil?
+      puts "No new data. Resaving old..."
+      puts cat.to_s+"\n"
+      todo_txt.write(cat.to_s+"\n")
+    else
+      puts data+"\n"
+      todo_txt.write(data+"\n")
+    end
+    puts '-'*20
+  end
+  todo_txt.flush
+  todo_txt.close
+
+  puts '-'*30
 
 end
 
@@ -304,7 +330,11 @@ def sync
 
   remote = IO.readlines($todopath+'.new')
 
+  puts "Merging changes..."
   merged = Merge3::three_way(common.join,local.join,remote.join)
+  puts "done"
+
+  merged = common.join if merged.chomp.strip.length == 0
 
   todo = File.open($todopath,'w+')
   todo.write(merged)
@@ -323,7 +353,7 @@ end
 # Push .new to database
 #File.rename($todopath,$todopath+'.tmp')
 #File.rename($todopath+'.new',$todopath)
-#push
+#push true
 #File.rename($todopath+'.tmp',$todopath)
 
 # Sync with iPhone
