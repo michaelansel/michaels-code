@@ -74,12 +74,16 @@ class Note
     puts "Saving note..."
     @time=(Time.now-978307200).to_i # Correct to iPhone epoch
     if @id == 0
-      $db.execute("INSERT INTO Note (creation_date,title,summary) VALUES('#{@time}','#{e(@title)}','#{e(@summary)}');")
-      @id = $db.get_first_value("SELECT ROWID FROM Note WHERE creation_date='#{@time}' AND title='#{e(@title)}' AND summary='#{e(@summary)}';")
-      $db.execute("INSERT INTO note_bodies (note_id,data) VALUES('#{@id}','#{e(@body)}');")
+      $db.transaction do |db|
+        db.execute("INSERT INTO Note (creation_date,title,summary) VALUES('#{@time}','#{e(@title)}','#{e(@summary)}');")
+        @id = db.get_first_value("SELECT ROWID FROM Note WHERE creation_date='#{@time}' AND title='#{e(@title)}' AND summary='#{e(@summary)}';")
+        db.execute("INSERT INTO note_bodies (note_id,data) VALUES('#{@id}','#{e(@body)}');")
+      end
     else
-      $db.execute("UPDATE Note SET creation_date='#{@time}',title='#{e(@title)}',summary='#{e(@summary)}' WHERE ROWID=#{@id};")
-      $db.execute("UPDATE note_bodies SET data='#{e(@body)}' WHERE note_id=#{@id}")
+      $db.transaction do |db|
+        db.execute("UPDATE Note SET creation_date='#{@time}',title='#{e(@title)}',summary='#{e(@summary)}' WHERE ROWID=#{@id};")
+        db.execute("UPDATE note_bodies SET data='#{e(@body)}' WHERE note_id=#{@id}")
+      end
     end
     puts "done"
   end
@@ -93,27 +97,30 @@ class Note
   end
 
   def body
-    rawbody.gsub(/^[^<]*<div><br class="webkit-block-placeholder"><\/div>/,'').gsub(/(<[\/]?div>)+/,"\n").gsub(/&lt;/,'<').gsub(/&gt;/,'>').gsub(/&amp;/,'&').gsub(/\\\\/,'\\').gsub(/''/,"'").gsub(/ /,' ').gsub(/<br[^>]*>/,"")
+    # Title/Summary Header
+    text = rawbody.gsub(/^[^<]*<div><br class="webkit-block-placeholder"><\/div>/,'')
+    # HTML tags
+    text = text.gsub(/(<[\/]?div>)+/,"\n").gsub(/<[\/]?((br)|(span))[^>]*[\/]?>/,"")
+    # Escaped HTML entities
+    text = text.gsub(/&lt;/,'<').gsub(/&gt;/,'>').gsub(/&amp;/,'&')
+    # Escaped quotes
+    text = text.gsub(/''/,"'")
+    # Non-breaking spaces
+    text = text.gsub(/ /,' ')
+    return text
   end
 
   def body=(text)
     unless text.nil?
-      # Replace all leading spaces with non-breaking spaces
-      text=text.split("\n").collect do |line|
-        #while line =~ /^((\&nbsp)*)[ ][ ]/ do line = line.gsub(/^((\&nbsp)*)[ ]/,'\1&nbsp') end
-        #line = line.gsub(/^((\&nbsp)*)[ ]/,'\1&nbsp ')
-        line = line.gsub(/[ ][ ]/,"  ")
-        line
-      end
+      # Replace all pairs of spaces with &nbsp;<space>
+      text=text.split("\n").collect{|x|x.gsub(/[ ][ ]/,"  ")}
       # Surround each line in its own <div>
       text="<div>"+text.join("</div><div>")+"</div>"
       # Add a <br> to all empty lines
-      text=text.gsub(/<div><\/div>/,"<div><br></div>")
+      text=text.gsub(/<div><\/div>/,"<div><br class=\"webkit-block-placeholder\"></div>")
     end
+    # Prepend title and a blank line
     text="#{@title}<div><br class=\"webkit-block-placeholder\"></div>"+text
-    # SQL escape
-    #text=text.gsub(/\\/, '\\\\').gsub(/'/, "''")
-    #text=SQLite3::Database.quote(text)
 
     @body=text
   end
@@ -138,22 +145,25 @@ class Note
 end
 
 class ToDoItem
-  TODO = :todo
-  DONE = :done
-  CANCELLED = :cancelled
-  DEFERRED = :deferred
-  WAITING = :waiting
-  PROJECT = :project
-  CATEGORY = :category
-
   VIM_OUTLINE = { :todo      => '--',
                   :done      => '\-',
                   :cancelled => '++',
                   :deferred  => '->',
                   :waiting   => '?-',
+                  :priority  => '!-',
                   :project   => '',
                   :category  => '@@'
                 }
+
+  VIM_OUTLINE_STYLE = { :todo      => '',
+                        :done      => 'color:#666',
+                        :cancelled => 'color:#666',
+                        :deferred  => 'color:#666',
+                        :waiting   => 'color:#666',
+                        :priority  => 'color:#990000',
+                        :project   => 'font-weight:bold;',
+                        :category  => ''
+                      }
 
   attr_accessor :status,:data,:children
 
@@ -225,8 +235,14 @@ class ToDoItem
   end
 end
 
-def to_iPhoneNote(todo)
-  
+def stylize(text)
+  ToDoItem::VIM_OUTLINE.keys.each do |tag|
+    text = text.gsub(/<div>([  ]*#{Regexp.escape(ToDoItem::VIM_OUTLINE[tag])}[^<]+)<\/div>/,
+                     "<div><span style=\"#{ToDoItem::VIM_OUTLINE_STYLE[tag]}\">\1</span></div>")
+    puts text
+    puts '-'*10
+  end
+  puts text
 end
 
 #Note.load_all.each {|x| puts x.to_s }
@@ -252,15 +268,8 @@ def push(force=false)
     note = Note.load_title("ToDo @#{category.data}")[0]
     note = Note.new("ToDo @#{category.data}",ToDoItem::VIM_OUTLINE[:category]+category.data) if note.nil?
     if force || note.body.chomp.strip != category.to_s.chomp.strip
-      puts "Old body"
-      puts '-'*20
-      puts note.body.chomp.strip
-      puts '-'*20
-      puts "New body"
-      puts '-'*20
+      puts '-'*50
       note.body = category.to_s
-      puts category.to_s.chomp.strip
-      puts '-'*20
       puts note.rawbody
       puts '-'*50
       note.save
@@ -281,7 +290,9 @@ def pull
   latest_times = {}
 
   # Read last updated times
-  IO.readlines($todopath+'.latest-times').each{|x| a=x.split(" :: ");latest_times[a[0].chomp.strip]=a[1].chomp.strip}
+  if File.exists? $todopath+'.latest-times'
+    IO.readlines($todopath+'.latest-times').each{|x| a=x.split(" :: ");latest_times[a[0].chomp.strip]=a[1].chomp.strip}
+  end
   puts latest_times.inspect
 
   # Load Notes
