@@ -6,7 +6,6 @@ require 'rubygems'
 require 'merge3'
 
 debug = false
-debug = true
 
 if File.exist? '/mnt/iphone/mount.sh'
   puts "iPhone FS not mounted!"
@@ -25,19 +24,24 @@ puts "Loading database..."
 $db = SQLite3::Database.new(dbpath)
 puts "done"
 
+#TODO: Add Sync table if it doesn't already exist
+# CREATE TABLE Sync (note_id INTEGER,sync_date INTEGER,unique(note_id));
+#TODO: Verify schema and Note/note_body pairs?
+
 class Note
-  attr_accessor :time,:title,:summary,:id
+  attr_accessor :time,:synctime,:title,:summary,:id
   def initialize(title='New Note',summary='New Note')
     @id=0
     @title=title
     @summary=summary
     @time=(Time.now-978307200).to_i # Correct to iPhone epoch
+    @synctime=@time
     @body=@title+"\n"+@summary
   end
 
   def self.load(id,lazy=false)
     puts "Loading note..."
-    result=$db.get_first_row("SELECT creation_date,title,summary FROM Note WHERE ROWID=#{id};")
+    result=$db.get_first_row("SELECT creation_date,title,summary,sync_date FROM Note JOIN Sync ON Note.ROWID = Sync.note_id WHERE Note.ROWID=#{id};")
     puts "done"
     if result == []
       puts "Not found"
@@ -49,6 +53,7 @@ class Note
     note.title = result[1]
     puts "Loaded #{note.title}"
     note.summary = result[2]
+    note.synctime = result[3]
     note.rawbody = nil
     load_body unless lazy
     return note
@@ -78,11 +83,13 @@ class Note
         db.execute("INSERT INTO Note (creation_date,title,summary) VALUES('#{@time}','#{e(@title)}','#{e(@summary)}');")
         @id = db.get_first_value("SELECT ROWID FROM Note WHERE creation_date='#{@time}' AND title='#{e(@title)}' AND summary='#{e(@summary)}';")
         db.execute("INSERT INTO note_bodies (note_id,data) VALUES('#{@id}','#{e(@body)}');")
+        db.execute("INSERT OR REPLACE INTO Sync (note_id,sync_date) VALUES(#{@id},#{@time});")
       end
     else
       $db.transaction do |db|
         db.execute("UPDATE Note SET creation_date='#{@time}',title='#{e(@title)}',summary='#{e(@summary)}' WHERE ROWID=#{@id};")
         db.execute("UPDATE note_bodies SET data='#{e(@body)}' WHERE note_id=#{@id}")
+        db.execute("INSERT OR REPLACE INTO Sync (note_id,sync_date) VALUES(#{@id},#{@time});")
       end
     end
     puts "done"
@@ -192,18 +199,18 @@ class ToDoItem
     $index = 0
     task = new
     task.data = "Imported Tasks"
-    task.children = f_vo(lines)
+    task.children = parse_vo(lines)
     return task
   end
 
-  def self.f_vo(lines,indent=2,baselevel=0)
+  def self.parse_vo(lines,baselevel=0)
     items = []
     while $index < lines.length do
       line = lines[$index]
       $index += 1
 
       next_level = baselevel
-      next_level = lines[$index].scan(/^[ ]*/)[0].length / indent unless lines[$index].nil?
+      next_level = lines[$index].scan(/^[ ]*/)[0].length unless lines[$index].nil?
 
       todo = nil
       unless line.length == 0 || line.chomp.length == 0 || line.chomp.strip.length == 0
@@ -217,11 +224,11 @@ class ToDoItem
           todo.status = :project
           todo.data = line
         end
-        todo.children = f_vo(lines,indent,next_level) if next_level > baselevel
+        todo.children = parse_vo(lines,next_level) if next_level > baselevel
       end
 
       next_level = baselevel
-      next_level = lines[$index].scan(/^[ ]*/)[0].length / indent unless lines[$index].nil?
+      next_level = lines[$index].scan(/^[ ]*/)[0].length unless lines[$index].nil?
 
       items.push << todo unless todo.nil?
       break if next_level < baselevel
@@ -249,7 +256,7 @@ end
 #Note.load_title("Todo List").each {|x| puts x.body ; x.delete}
 #puts Note.load_title("Todo")[0].body
 #puts ToDoItem.new.to_vo
-#puts ToDoItem.f_vo("    -- Make amazing").to_s
+#puts ToDoItem.parse_vo("    -- Make amazing").to_s
 #note = Note.new("Todo List","Computer Todo List")
 #note = Note.load_title("Todo List")[0]
 #note.body = IO.readlines('/home/mra13/todo.txt').join
@@ -259,9 +266,12 @@ end
 
 def push(force=false)
   puts '-'*50
-  system 'cp "'+$todopath+'" "'+$todopath+'.bak"'
+  puts "Pushing local ToDo items to iPhone"
+  puts '-'*50
+  date = Time.now.strftime('%Y.%m.%d-%H.%M.%S')
+  # Backup todo.txt before we push it
+  system 'cp "'+$todopath+'" "'+$todopath+'.bak-'+date+'"'
   system 'cp "'+$todopath+'" "'+$todopath+'.latest"'
-  latest_times = File.open($todopath+'.latest-times','w+')
 
   # Write each ToDoItem to an iPhone Note
   ToDoItem.load_vo($todopath).children.compact.delete_if{|x|x.status!=:category}.each do |category|
@@ -273,14 +283,10 @@ def push(force=false)
       puts note.rawbody
       puts '-'*50
       note.save
-      latest_times.write(note.title+" :: "+note.time.to_s+"\n")
     else
       puts "Note body unchanged. Forget writing that again!"
-      latest_times.write(note.title+" :: "+note.time.to_s+"\n")
     end
   end
-  latest_times.flush
-  latest_times.close
 end
 
 
@@ -288,48 +294,62 @@ end
 def pull
   finish = {}
   latest_times = {}
-
-  # Read last updated times
-  if File.exists? $todopath+'.latest-times'
-    IO.readlines($todopath+'.latest-times').each{|x| a=x.split(" :: ");latest_times[a[0].chomp.strip]=a[1].chomp.strip}
-  end
-  puts latest_times.inspect
+  puts '-'*50
+  puts "Grabbing latest data from iPhone"
+  puts '-'*50
 
   # Load Notes
-  Note.load_title("ToDo @*").each do |note|
+  puts "Loading all ToDo Notes..."
+  puts '-'*10
+  notes = Note.load_title("ToDo @*")
+  puts '-'*10
+  puts "Loading modified Note bodies..."
+  notes.each do |note|
     puts '-'*20
-    puts note.to_s.chomp
-    puts '-'*10
-    unless note.time == latest_times[note.title]
-      puts note.rawbody
+    puts note.to_s.split("\n")[0]
+    unless note.time == note.synctime
       puts '-'*10
+      puts note.rawbody
       finish[note.title] = note.body
     else
+      puts "Note unchanged since last sync. Using cache..."
       finish[note.title] = nil
     end
   end
 
-  puts '-'*30
+  puts '-'*20
+  puts "Saving iPhone Notes to "+$todopath+'.new'
   todo_txt = File.open($todopath+'.new','w+')
 
   # Write notes locally in existing order
   ToDoItem.load_vo($todopath).children.flatten.compact.each do |cat|
-    data = finish["ToDo @"+cat.data]
+    data = finish.delete("ToDo @"+cat.data)
     puts '-'*20
     if data.nil?
-      puts "No new data. Resaving old..."
-      puts cat.to_s+"\n"
-      todo_txt.write(cat.to_s+"\n")
+      puts '-'*10 + "(From cache)" + '-'*10
+      puts data = cat.to_s.chomp
     else
-      puts data+"\n"
-      todo_txt.write(data+"\n")
+      puts data = data.chomp
     end
-    puts '-'*20
+    todo_txt.write(data+"\n\n\n")
   end
+  
+  # Are there any Note-ToDoItems that we didn't write?
+  # Just a failsafe check
+  finish.keys.each do |todo|
+    puts '*'*50
+    puts "Exists ONLY on iPhone!!!"
+    puts todo
+    puts '*'*50
+    puts data = finish[todo].chomp+"\n\n\n"
+    todo_txt.write(data)
+  end
+
   todo_txt.flush
   todo_txt.close
 
-  puts '-'*30
+  puts '-'*20
+  puts "Data saved to"+$todopath+'.new'
 
 end
 
@@ -345,18 +365,20 @@ def sync
   merged = Merge3::three_way(common.join,local.join,remote.join)
   puts "done"
 
-  merged = common.join if merged.chomp.strip.length == 0
-
-  todo = File.open($todopath,'w+')
-  todo.write(merged)
-  todo.flush
-  todo.close
+  if merged.chomp.strip.length != 0
+    todo = File.open($todopath,'w+')
+    todo.write(merged)
+    todo.flush
+    todo.close
+  else
+    puts "Merge error? Or maybe just no changes..."
+  end
 
   push
 end
 
 # Push to iPhone
-#push
+#push true
 
 # Pull from iPhone
 #pull
