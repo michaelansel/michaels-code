@@ -105,10 +105,12 @@ class Note
   end
 
   def body
+    # Grab body from database if not already loaded
+    text = rawbody
     # Title/Summary Header
-    text = rawbody.gsub(/^[^<]*<div><br class="webkit-block-placeholder"><\/div>/,'')
+    text = text.gsub(/^[^<]*<div><br class="webkit-block-placeholder"><\/div>/,'')
     # HTML tags
-    text = text.gsub(/(<[\/]?div>)+/,"\n").gsub(/<[\/]?((br)|(span))[^>]*[\/]?>/,"")
+    text = text.gsub(/<\/div><div>/,"\n").gsub(/<[\/]?((div)|(br)|(span))[^>]*[\/]?>/,"")
     # Escaped HTML entities
     text = text.gsub(/&lt;/,'<').gsub(/&gt;/,'>').gsub(/&amp;/,'&')
     # Escaped quotes
@@ -319,8 +321,8 @@ def pull
   end
 
   puts '-'*20
-  puts "Saving iPhone Notes to "+$todopath+'.new'
-  todo_txt = File.open($todopath+'.new','w+')
+  puts "Saving iPhone Notes to "+$todopath+'.pulled'
+  todo_txt = File.open($todopath+'.pulled','w+')
 
   # Write notes locally in existing order
   ToDoItem.load_vo($todopath).children.flatten.compact.each do |cat|
@@ -350,7 +352,7 @@ def pull
   todo_txt.close
 
   puts '-'*20
-  puts "Data saved to"+$todopath+'.new'
+  puts "Data saved to"+$todopath+'.pulled'
 
 end
 
@@ -360,20 +362,23 @@ def sync
 
   pull
 
-  remote = IO.readlines($todopath+'.new')
+  remote = IO.readlines($todopath+'.pulled')
 
   puts "Merging changes..."
-  merged = Merge3::three_way(common.join,local.join,remote.join)
+  #merged = Merge3::three_way(common.join,local.join,remote.join)
+  merged = `/usr/bin/env diff3 -m --easy-only #{$todopath} #{$todopath+'.latest'} #{$todopath+'.pulled'}`
   puts "done"
 
-  if merged.chomp.strip.length != 0
-    todo = File.open($todopath,'w+')
-    todo.write(merged)
-    todo.flush
-    todo.close
-  else
+  if merged.chomp.strip.length == 0
     puts "Merge error? Or maybe just no changes..."
+    exit 1
   end
+
+  # Save changes to local file
+  todo = File.open($todopath,'w+')
+  todo.write(merged)
+  todo.flush
+  todo.close
 
   push
 end
