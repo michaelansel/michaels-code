@@ -35,13 +35,13 @@ class Note
     @title=title
     @summary=summary
     @time=(Time.now-978307200).to_i # Correct to iPhone epoch
-    @synctime=@time
+    @synctime=0
     @body=@title+"\n"+@summary
   end
 
   def self.load(id,lazy=false)
     puts "Loading note..."
-    result=$db.get_first_row("SELECT creation_date,title,summary,sync_date FROM Note JOIN Sync ON Note.ROWID = Sync.note_id WHERE Note.ROWID=#{id};")
+    result=$db.get_first_row("SELECT creation_date,title,summary,sync_date FROM Note LEFT JOIN Sync ON Sync.note_id = Note.ROWID WHERE Note.ROWID=#{id};")
     puts "done"
     if result == []
       puts "Not found"
@@ -54,6 +54,7 @@ class Note
     puts "Loaded #{note.title}"
     note.summary = result[2]
     note.synctime = result[3]
+    note.synctime = 0 if note.synctime.nil?
     note.rawbody = nil
     load_body unless lazy
     return note
