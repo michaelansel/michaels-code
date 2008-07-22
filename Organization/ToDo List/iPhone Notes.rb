@@ -2,8 +2,8 @@
 
 require 'sqlite3'
 require 'cgi'
-require 'rubygems'
-require 'merge3'
+#require 'rubygems'
+#require 'merge3'
 
 debug = false
 
@@ -310,7 +310,7 @@ def pull
   notes.each do |note|
     puts '-'*20
     puts note.to_s.split("\n")[0]
-    unless note.time == note.synctime
+    unless note.time == note.synctime #note unchanged
       puts '-'*10
       puts note.rawbody
       finish[note.title] = note.body
@@ -343,6 +343,12 @@ def pull
     puts '*'*50
     puts "Exists ONLY on iPhone!!!"
     puts todo
+    if finish[todo].nil?  # then the category was deleted locally and unchanged on the phone
+                          #      OR
+                          # the phone entry is damaged (title w/o body) and should be ignored
+      puts "Does not exist locally and unchanged on phone. Assuming intentionally deleted and leaving out of /pulled/ data"
+      next
+    end
     puts '*'*50
     puts data = finish[todo].chomp+"\n\n\n"
     todo_txt.write(data)
